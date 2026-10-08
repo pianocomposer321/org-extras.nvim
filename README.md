@@ -1,11 +1,16 @@
 # org-extras.nvim
 
-A bundle of independent extras for [org.nvim](https://github.com/xheisenbugx/org.nvim):
+Native [org.nvim](https://github.com/xheisenbugx/org.nvim) extensions for
 agenda lines you can lay out yourself, a composite "what to do next" score,
-`:COMPLETION:` percent cycling, and a scheduling grid.
+`:COMPLETION:` percent cycling, and a scheduling grid — plus two small
+shared libraries (relative date labels, the effort ladder) they build on.
 
-Each piece is separate — use one, use them all. They only touch each other
-where documented (the urgency score reads the completion percent).
+Everything with a lifecycle is a real `org.Extension` (contract in `:h
+org.extensions`): each ships at `lua/org/extensions/<name>.lua` with
+`defaults`, `actions` and `setup`/`teardown`, is enabled through org.nvim's
+own `extensions` table, and is torn down cleanly on re-setup. They only
+touch each other where documented (the urgency score reads the completion
+percent; the `list_view` tokens read both).
 
 ## Extensions
 
@@ -22,7 +27,7 @@ edge of the view. Which cells appear is up to the block:
   match = "TODO|NEXT|STARTED",
   files = { "~/org/**/*.org" },
   sorting = { "user-defined-up" },
-  cmp_user_defined = require("org_extras.urgency").cmp,
+  cmp_user_defined = require("org.extensions.urgency").cmp,
   sections = { left = "%t %i", right = "%c %s %d" },
 }
 ```
@@ -50,8 +55,8 @@ New cells don't need a patch: register a token once and every format can use
 it.
 
 ```lua
-local lv = require("org_extras.list_view")
-lv.user_tags.state = function(item)
+local lv = require("org.extensions.list_view")
+lv.user_specs.state = function(item)
   return item.headline:get_property("STATE") or ""
 end
 -- or per block:
@@ -71,7 +76,7 @@ plus a floor for tasks tagged `:today:`. Overdue > today > tomorrow > later,
 always.
 
 ```lua
-local urgency = require("org_extras.urgency")
+local urgency = require("org.extensions.urgency")
 -- as a block's cmp_user_defined:
 cmp_user_defined = urgency.cmp
 -- or as a value:
@@ -79,28 +84,63 @@ urgency.urgency(item)
 ```
 
 The expression, its rationale and the ranking rules it encodes live at the
-top of [`lua/org_extras/urgency.lua`](lua/org_extras/urgency.lua). Tweak the
-numbers to taste — sorting reads exactly that function.
+top of [`lua/org/extensions/urgency.lua`](lua/org/extensions/urgency.lua).
 
-Options:
+**Everything about the formula is configurable.** Each constant is an
+option, and `score` replaces the expression outright:
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `today_floor` | 70 | floor for undated `:today:`-tagged tasks |
+| `severity_now` | 80 | severity of a date at zero days out (peak, and the base overdue adds to) |
+| `overdue_rate` | 40 | extra severity per day past due |
+| `decay` | 0.75 | how fast dates ahead fall off (`severity_now / (1+days)^decay`) |
+| `scheduled_weight` | 0.8 | a scheduled day's share of the same-day severity |
+| `deadline_bonus` | 6 | flat add: due-by outranks start-hint |
+| `effort_scale` | 1 | multiplier on `ln(1 + hours)`; 0 drops Effort from the ranking |
+| `completion_damping` | 0.5 | largest fraction completion may subtract; 0 disables |
+| `completion_gamma` | 1.5 | penalty ramp; above 1 the middle barely dents |
+| `score` | — | `function(item) -> number`, used instead of all of the above |
+
+Options go through org.nvim's extensions table (the loader merges them over
+`defaults` before org.setup sets keymaps):
 
 ```lua
-require("org_extras").setup({
-  urgency = { today_floor = 70 }, -- score floor for undated :today: tasks
-})
+extensions = {
+  urgency = {
+    today_floor = 60,
+    effort_scale = 0,      -- rank by dates only
+    -- or take over completely:
+    -- score = function(item) return <your number> end,
+  },
+},
+```
+
+For one view with a different idea of "urgent", wrap any scoring function
+in `cmp_with` and bind it per block:
+
+```lua
+local cmp_with = require("org.extensions.urgency").cmp_with
+-- ...
+cmp_user_defined = cmp_with(function(item)
+  return <your number>
+end)
 ```
 
 ### `completion` — `:COMPLETION:` percent cycling
 
 Read an entry's `COMPLETION` property as a percent and cycle it through a
 ladder of segments (10 → 25 → 50 → 75 → 90 → none — never 100: a fully
-completed task is DONE). `setup()` installs both actions; bind them the
+completed task is DONE). The extension registers `set_completion` for
+`mappings.org` and `:Org` through its `actions` field; the agenda side is
+wired in `setup()` (the contract has no field for the agenda action
+registry) and unwired by `teardown()`. Enable it and bind both sides the
 org.nvim way:
 
 ```lua
-require("org_extras").setup({
-  completion = { segments = { 10, 25, 50, 75, 90 } },
-})
+extensions = {
+  completion = { segments = { 10, 25, 50, 75, 90 } }, -- defaults shown
+},
 
 -- in org.nvim's opts:
 mappings = {
@@ -114,10 +154,6 @@ mappings = {
 One row per task, a rectangle on the day it is scheduled — nothing for a
 deadline, and undated tasks still get a row so `S` can point them at a day.
 Zoom day/week/month, pan, reschedule and set deadlines from the grid.
-
-`plan` is a native org.nvim extension (it ships at
-`lua/org/extensions/plan.lua`), so you enable it through org.nvim's own
-extensions table:
 
 ```lua
 extensions = {
@@ -133,27 +169,36 @@ See `:h org.extensions` in org.nvim for the extension contract; `plan`'s own
 options are documented at the top of
 [`lua/org/extensions/plan.lua`](lua/org/extensions/plan.lua).
 
+## Libraries
+
+Two plain modules with no lifecycle, shared by the extensions above — require
+them directly, they need no enabling:
+
+- `org_extras.dates` — the relative-label ladder ("today", "next Thursday")
+  behind the `%s`/`%d` tokens and agenda date echoes.
+- `org_extras.effort` — the effort ladder (`0:30` / `1:00` / `2:00`) and
+  `duration_minutes`, the Effort/Length parsing the score and tokens read.
+
 ## Installation
 
-org-extras loads as a dependency of org.nvim, and `org_extras.setup()` runs
-in org.nvim's config *before* `org.setup()` — that order matters: org.setup
-resolves the `plan` extension by requiring it, and `setup()` registers the
-`list_view` type and the completion actions with org's renderer.
+org-extras loads as a dependency of org.nvim; all four extensions are then
+enabled through org.nvim's own `extensions` table, so org.setup resolves
+them (and their default keymaps) itself — there is no separate setup call.
 
 ```lua
 {
   "xheisenbugx/org.nvim",
   branch = "dev",
   dependencies = { "pianocomposer321/org-extras.nvim" },
-  opts = { -- your org.nvim opts, including extensions = { plan = { ... } }
+  opts = {
+    extensions = {
+      list_view = true,                 -- default opts; `false` disables
+      completion = true,
+      urgency = true,                   -- or { today_floor = 90, score = fn }
+      plan = { source = { "~/org/**/*.org" }, zoom = "week" },
+      -- plus any built-in extensions you want (timeline, quickadd, ...)
+    },
   },
-  config = function(_, opts)
-    require("org_extras").setup({
-      -- all extensions are on by default; disable with `false`:
-      -- list_view = false, urgency = false, completion = false,
-    })
-    require("org").setup(opts)
-  end,
 }
 ```
 

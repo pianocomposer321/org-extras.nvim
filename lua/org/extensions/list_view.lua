@@ -1,4 +1,4 @@
----@mod org_extras.list_view The `list_view` agenda type: a configurable line layout
+---@mod org.extensions.list_view The `list_view` agenda type: a configurable line layout
 ---
 --- A `list_view` block renders each item as one line built from two format
 --- strings — a `left` section that flows from the line's start and a `right`
@@ -44,7 +44,7 @@
 
 local dates = require("org_extras.dates")
 local effort = require("org_extras.effort")
-local completion = require("org_extras.completion")
+local completion = require("org.extensions.completion")
 
 local M = {}
 
@@ -307,14 +307,12 @@ function M.parts(item, ctx)
   return parts
 end
 
---- Register the agenda type and the line builder with org.nvim (idempotent).
---- Call it from your config after org.nvim itself is available (its own
---- `setup()` is fine — this only touches static renderer tables).
+--- Register the agenda type and the line builder with org.nvim. Called by
+--- the extension loader during `org.setup` (before keymaps are set); the
+--- teardown below undoes it on re-setup or when the extension is disabled.
+local orig_item_parts ---@type function|nil
+
 function M.setup(_opts)
-  if M.installed then
-    return
-  end
-  M.installed = true
   -- The same items the built-in "todo" type returns, claimed under our own
   -- block type so the line builder can key the rendering off
   -- ctx.block.type. Blocks keep their own match / files / skip / sorting /
@@ -330,14 +328,27 @@ function M.setup(_opts)
     return { items = require("org.agenda.items").todo(ctx.files, kws, lopts), kind = "todo" }
   end
   -- Route every `list_view` block through the parts builder; anything else
-  -- falls through to the stock renderer untouched.
-  local orig_item_parts = R().item_parts
-  R().item_parts = function(item, ctx)
-    if not (ctx and ctx.block and ctx.block.type == "list_view") then
-      return orig_item_parts(item, ctx)
+  -- falls through to the stock renderer untouched. The saved original is
+  -- also the re-entry guard: teardown restores it, so a re-setup wraps
+  -- exactly once.
+  if not orig_item_parts then
+    orig_item_parts = R().item_parts
+    R().item_parts = function(item, ctx)
+      if not (ctx and ctx.block and ctx.block.type == "list_view") then
+        return orig_item_parts(item, ctx)
+      end
+      return M.parts(item, ctx)
     end
-    return M.parts(item, ctx)
   end
+end
+
+--- Restore the stock renderer: unwrap `item_parts` and drop the source.
+function M.teardown()
+  if orig_item_parts then
+    R().item_parts = orig_item_parts
+    orig_item_parts = nil
+  end
+  R().sources.list_view = nil
 end
 
 return M

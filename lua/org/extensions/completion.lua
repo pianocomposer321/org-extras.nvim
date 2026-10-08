@@ -1,24 +1,50 @@
----@mod org_extras.completion Completion-percent model and cycling
+---@mod org.extensions.completion Completion-percent model and cycling
 ---
 --- A `:COMPLETION:` property model for org headlines: read it as a percent,
---- cycle it through a fixed ladder of segments, and act on it from an agenda
---- view or an org buffer. Registering `setup()` installs:
+--- cycle it through a fixed ladder of segments, and act on it from an org
+--- buffer or an agenda view.
 ---
----   * the agenda action `set_completion` (bind it with
----     `mappings.agenda.set_completion`), which cycles the entry under the
----     cursor and refreshes the view;
----   * the org-buffer action `set_completion` (bind it with
----     `mappings.org.set_completion`).
+--- As an org extension it registers the `set_completion` action for
+--- `mappings.org.set_completion` and `:Org set_completion` (the contract's
+--- `actions` field). The agenda side dispatches through a separate registry
+--- (`org.agenda.view.actions`), which the extension contract has no field
+--- for, so `setup()` assigns it there and `teardown()` restores it. Bind
+--- both sides in your config:
+---
+--- ```lua
+--- extensions = { completion = { segments = { 10, 25, 50, 75, 90 } } },
+--- mappings = {
+---   org = { set_completion = "<prefix>C" },
+---   agenda = { set_completion = "C" },
+--- },
+--- ```
 ---
 --- There is no 100% segment: a fully completed task is DONE, so the cycle
 --- ends at 90 -> none rather than claiming completion.
 
 local M = {}
 
---- The allowed values of an item's :COMPLETION:. Override with
---- `setup({ segments = ... })`.
+--- Option defaults; the user's `extensions.completion` table is merged
+--- over them by the extension loader.
+M.defaults = {
+  --- The allowed values of an item's :COMPLETION:.
+  segments = { 10, 25, 50, 75, 90 },
+}
+
+--- Current segments; `setup(opts)` refreshes it from `opts.segments`.
 ---@type integer[]
-M.SEGMENTS = { 10, 25, 50, 75, 90 }
+M.SEGMENTS = vim.deepcopy(M.defaults.segments)
+
+--- Registered into `org.actions.list` by the extension loader:
+--- `mappings.org.set_completion` and `:Org set_completion` resolve here.
+---@type table<string, org.Action>
+M.actions = {
+  set_completion = {
+    "org.extensions.completion",
+    "cycle_completion_at_cursor",
+    desc = "Cycle the completion percent of the entry at point",
+  },
+}
 
 --- Completion percent of an item, 0..100, 0 when it has none. The value of
 --- its headline's :COMPLETION: property (inherited up the file if absent).
@@ -97,11 +123,11 @@ function M.cycle_completion_at_cursor()
   return true
 end
 
---- The agenda action: cycles the entry under the cursor from any agenda
---- view and refreshes, so an urgency-sorted view re-ranks right away and
---- the new percent shows at the end of the line. The target is resolved
---- through view.resolve_target, which loads the item's own file and points
---- at the real headline line.
+--- The agenda side of `set_completion`: cycles the entry under the cursor
+--- from any agenda view and refreshes, so an urgency-sorted view re-ranks
+--- right away and the new percent shows at the end of the line. The target
+--- is resolved through view.resolve_target, which loads the item's own file
+--- and points at the real headline line.
 function M.agenda_cycle()
   local view = require("org.agenda.view")
   local item = view.item_at_cursor()
@@ -120,19 +146,37 @@ function M.agenda_cycle()
   end
 end
 
---- Install the actions (idempotent) and take any option overrides.
----@param opts? { segments?: integer[] }
+local saved_view_action, saved = nil, false
+
+--- Resolve options (called by the extension loader) and wire the agenda
+--- action; `mappings.agenda.set_completion` dispatches through
+--- `org.agenda.view.actions`, which has no field on `org.Extension`.
+---@param opts? table
 function M.setup(opts)
   opts = opts or {}
-  if opts.segments then
+  if opts.segments ~= nil then
+    if type(opts.segments) ~= "table" or #opts.segments == 0 then
+      error(("completion: opts.segments must be a non-empty list, got %s"):format(vim.inspect(opts.segments)))
+    end
     M.SEGMENTS = opts.segments
+  else
+    M.SEGMENTS = vim.deepcopy(M.defaults.segments)
   end
-  require("org.agenda.view").actions.set_completion = M.agenda_cycle
-  require("org.actions").list.set_completion = {
-    "org_extras.completion",
-    "cycle_completion_at_cursor",
-    desc = "Cycle the completion percent of the entry at point",
-  }
+  local view = require("org.agenda.view")
+  if not saved then
+    saved_view_action = view.actions.set_completion
+    saved = true
+  end
+  view.actions.set_completion = M.agenda_cycle
+end
+
+--- Undo what `setup` did when the extension is turned off or reconfigured.
+function M.teardown()
+  if saved then
+    require("org.agenda.view").actions.set_completion = saved_view_action
+    saved_view_action, saved = nil, false
+  end
+  M.SEGMENTS = vim.deepcopy(M.defaults.segments)
 end
 
 return M
