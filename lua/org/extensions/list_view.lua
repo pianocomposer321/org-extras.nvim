@@ -33,6 +33,10 @@
 ---   %e  effort name ("short", "medium", "long") (6)
 ---   %p  completion percent ("50%", "" when unset) (4)
 ---
+--- `%c` reads the file-or-headline property named by the `category_property`
+--- option (default "COURSE"); point it at your own, e.g.
+--- `extensions = { list_view = { category_property = "PROJECT" } }`.
+---
 --- Extensions: entries in `M.user_specs` (global) or the block's own
 --- `specs` table win over the standard library:
 ---
@@ -47,6 +51,16 @@ local effort = require("org_extras.effort")
 local completion = require("org.extensions.completion")
 
 local M = {}
+
+--- Option defaults; the user's `extensions.list_view` table is merged over
+--- them by the extension loader.
+M.defaults = {
+  --- File (or headline) property the `%c` "category" cell reads.
+  category_property = "COURSE",
+}
+
+---@type table
+M.opts = vim.deepcopy(M.defaults)
 
 -- org.nvim modules, required lazily: this module must load before
 -- org.nvim itself is available (bundle ordering), only setup() and the
@@ -74,7 +88,7 @@ end
 
 local function course_value(item)
   local hl = item.headline
-  return hl and hl.file and hl.file:get_property("COURSE") or ""
+  return hl and hl.file and hl.file:get_property(M.opts.category_property) or ""
 end
 
 --- The standard library: token -> { value, width?, face? }.
@@ -312,7 +326,16 @@ end
 --- teardown below undoes it on re-setup or when the extension is disabled.
 local orig_item_parts ---@type function|nil
 
-function M.setup(_opts)
+function M.setup(opts)
+  opts = opts or {}
+  if opts.category_property ~= nil and type(opts.category_property) ~= "string" then
+    error(
+      ("list_view: opts.category_property must be a string, got %s"):format(
+        type(opts.category_property)
+      )
+    )
+  end
+  M.opts = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
   -- The same items the built-in "todo" type returns, claimed under our own
   -- block type so the line builder can key the rendering off
   -- ctx.block.type. Blocks keep their own match / files / skip / sorting /
@@ -349,6 +372,7 @@ function M.teardown()
     orig_item_parts = nil
   end
   R().sources.list_view = nil
+  M.opts = vim.deepcopy(M.defaults)
 end
 
 return M

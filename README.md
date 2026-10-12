@@ -42,11 +42,14 @@ right-aligns the value to a width. Omitted sides fall back to the defaults —
 |-------|---------|---------------|
 | `%t`  | todo keyword | — |
 | `%i`  | item title (truncated to fit) | — |
-| `%c`  | category (a file/headline property, `COURSE` by default) | 22 |
+| `%c`  | category: the property named by `category_property` (default `COURSE`) | 22 |
 | `%s`  | scheduled, relative label ("today", "next Thursday") | 14 |
 | `%d`  | deadline, relative label | 14 |
 | `%e`  | effort name ("short", "medium", "long") | 6 |
 | `%p`  | completion percent ("50%", empty when unset) | 4 |
+
+The `%c` cell reads a file-or-headline property; point it at your own with
+`extensions = { list_view = { category_property = "PROJECT" } }`.
 
 `sections` may also be `function(item, ctx)` returning the same table, for
 layouts that depend on the item.
